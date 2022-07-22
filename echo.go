@@ -40,6 +40,7 @@ import (
 	"bytes"
 	stdContext "context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -132,6 +133,17 @@ type (
 	// Renderer is the interface that wraps the Render function.
 	Renderer interface {
 		Render(io.Writer, string, interface{}, Context) error
+	}
+
+	// ErrorMarshaler is an interface that errors which can be marshalled
+	// and delivered to the client should implement.  Echo's HTTPError
+	// conforms to this interface, but you can define your own errors which
+	// additionally implement this interface, allowing for richer error
+	// return types.
+	ErrorMarshaler interface {
+		StatusCode(c Context) int
+		ContentType(c Context) string
+		MarshalError(c Context) (bytes []byte, err error)
 	}
 
 	// Map defines a generic map of type `map[string]interface{}`.
@@ -389,29 +401,31 @@ func (e *Echo) DefaultHTTPErrorHandler(err error, c Context) {
 				he = herr
 			}
 		}
-	} else {
-		he = &HTTPError{
-			Code:    http.StatusInternalServerError,
-			Message: http.StatusText(http.StatusInternalServerError),
-		}
 	}
 
-	// Issue #1426
-	code := he.Code
-	message := he.Message
-	if m, ok := he.Message.(string); ok {
-		if e.Debug {
-			message = Map{"message": m, "error": err.Error()}
+	// If the error doesn't implement ErrorMarshaler (and therefore also
+	// isn't an HTTPError), then we produce an HTTPError, which does.
+	var em ErrorMarshaler
+	em, ok = err.(ErrorMarshaler)
+	if !ok {
+		he := &HTTPError{
+			Code:     http.StatusInternalServerError,
+			Message:  http.StatusText(http.StatusInternalServerError),
+			Internal: err,
+		}
+		em = he
+	}
+
+	marshalled, err := em.MarshalError(c)
+	if err == nil {
+		// HEAD must not return a body;
+		// https://www.rfc-editor.org/rfc/rfc9110.html#name-head
+		if c.Request().Method == http.MethodHead {
+			c.Response().Header().Set(HeaderContentType, em.ContentType(c))
+			err = c.NoContent(em.StatusCode(c))
 		} else {
-			message = Map{"message": m}
+			err = c.Blob(em.StatusCode(c), em.ContentType(c), marshalled)
 		}
-	}
-
-	// Send response
-	if c.Request().Method == http.MethodHead { // Issue #608
-		err = c.NoContent(he.Code)
-	} else {
-		err = c.JSON(code, message)
 	}
 	if err != nil {
 		e.Logger.Error(err)
@@ -873,6 +887,49 @@ func (he *HTTPError) Error() string {
 		return fmt.Sprintf("code=%d, message=%v", he.Code, he.Message)
 	}
 	return fmt.Sprintf("code=%d, message=%v, internal=%v", he.Code, he.Message, he.Internal)
+}
+
+// MarshalError returns the marshalled form of this error, suitable for
+// delivery to the client.  This is part of compatibility with the
+// `ErrorMarshaler` interface.
+func (he *HTTPError) MarshalError(c Context) ([]byte, error) {
+	message := he.Message
+	// If it's a string, then build a map, providing a very basic JSON response
+	if m, ok := he.Message.(string); ok {
+		var errMsg string
+		if he.Internal != nil {
+			errMsg = he.Internal.Error()
+		} else {
+			errMsg = he.Error()
+		}
+		if c.Echo().Debug {
+			message = Map{"message": m, "error": errMsg}
+		} else {
+			message = Map{"message": m}
+		}
+	}
+
+	var outBytes []byte
+	var err error
+	if _, pretty := c.QueryParams()["pretty"]; c.Echo().Debug || pretty {
+		outBytes, err = json.MarshalIndent(message, "", defaultIndent)
+	} else {
+		outBytes, err = json.Marshal(message)
+	}
+	outBytes = append(outBytes, '\n')
+	return outBytes, err
+}
+
+// StatusCode returns the HTTP Status Code for this Error. This is part of
+// compatibility with the `ErrorMarshaler` interface.
+func (he *HTTPError) StatusCode(c Context) int {
+	return he.Code
+}
+
+// ContentType returns the Content Type for this Error. This is part of
+// compatibility with the `ErrorMarshaler` interface.
+func (he *HTTPError) ContentType(c Context) string {
+	return MIMEApplicationJSONCharsetUTF8
 }
 
 // SetInternal sets error to HTTPError.Internal

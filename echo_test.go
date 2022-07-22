@@ -1271,7 +1271,7 @@ func TestDefaultHTTPErrorHandler(t *testing.T) {
 	// internal error should be reflected in the message
 	c, b = request(http.MethodGet, "/internal-error", e)
 	assert.Equal(t, http.StatusBadRequest, c)
-	assert.Equal(t, "{\n  \"error\": \"code=400, message=Bad Request, internal=internal error message body\",\n  \"message\": \"Bad Request\"\n}\n", b)
+	assert.Equal(t, "{\n  \"error\": \"internal error message body\",\n  \"message\": \"Bad Request\"\n}\n", b)
 
 	e.Debug = false
 	// With Debug=false the error response is shortened

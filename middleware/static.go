@@ -197,8 +197,8 @@ func StaticWithConfig(config StaticConfig) echo.MiddlewareFunc {
 					return err
 				}
 
-				var he *echo.HTTPError
-				if !(errors.As(err, &he) && config.HTML5 && he.Code == http.StatusNotFound) {
+				var em echo.ErrorMarshaler
+				if !(errors.As(err, &em) && config.HTML5 && em.StatusCode(c) == http.StatusNotFound) {
 					return err
 				}
 

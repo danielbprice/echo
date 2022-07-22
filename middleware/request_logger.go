@@ -265,9 +265,9 @@ func (config RequestLoggerConfig) ToMiddleware() (echo.MiddlewareFunc, error) {
 			if config.LogStatus {
 				v.Status = res.Status
 				if err != nil {
-					var httpErr *echo.HTTPError
-					if errors.As(err, &httpErr) {
-						v.Status = httpErr.Code
+					var em echo.ErrorMarshaler
+					if errors.As(err, &em) {
+						v.Status = em.StatusCode(c)
 					}
 				}
 			}
